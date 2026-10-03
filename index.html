@@ -502,6 +502,7 @@ var FTICK_FROM=9,FTICK_TO=20,ftickBlocked=true;
 var ftickTeams={},ftickWeek=null,ftickSeason=null,ftickLast=null,ftickScores=null;
 var ftickPlayers={},ftickStats=null,ftickPrevious=null,ftickLeaders={},ftickMatchLeaders={};
 var ftickRecent=[],ftickAlerts=[],ftickThresholds={},ftickBench={},ftickSections=[],ftickSection=0;
+var ftickPendingTD={};
 var ftickInterruptUntil=0,ftickRendered='',ftickBusy=false,ftickStatsAt=0,ftickStatsFresh=false;
 var ftickNextRotation=0;
 var FTICK_POSITIONS=['RB','WR','QB','TE','K','DEF'];
@@ -584,6 +585,7 @@ function ftickEvent(text,priority){var e={text:text,at:Date.now(),priority:prior
   ftickRecent.unshift(e);ftickRecent=ftickRecent.slice(0,8);
   if(priority>=2){ftickAlerts.push(e);ftickAlerts.sort(function(a,b){return b.priority-a.priority||a.at-b.at});
     ftickAlerts=ftickAlerts.slice(0,6);ftickInterrupt()}
+  return e;
 }
 function ftickInterrupt(){if(!ftickWindow()||Date.now()<ftickInterruptUntil||!ftickAlerts.length)return;
   var e=ftickAlerts.shift();ftickInterruptUntil=Date.now()+8500;
@@ -592,6 +594,9 @@ function ftickInterrupt(){if(!ftickWindow()||Date.now()<ftickInterruptUntil||!ft
   setTimeout(function(){ftickInterruptUntil=0;ftickRender();ftickInterrupt()},8500);
 }
 function ftickProcess(data){var all=ftickPlayersFrom(data),ranks=ftickRank(all),pairs=ftickPairs(data);
+  Object.keys(ftickPendingTD).forEach(function(id){
+    if(Date.now()-ftickPendingTD[id].at>600000)delete ftickPendingTD[id]
+  });
   var matchLeaders={};pairs.forEach(function(p){var a=Number(p[0].points),b=Number(p[1].points);
     matchLeaders[p[0].matchup_id]=a===b?null:(a>b?p[0].roster_id:p[1].roster_id)});
   var leaders={};FTICK_POSITIONS.forEach(function(pos){leaders[pos]=ranks[pos][0]&&ranks[pos][0].id});
@@ -599,10 +604,19 @@ function ftickProcess(data){var all=ftickPlayersFrom(data),ranks=ftickRank(all),
     var movers=[];
     Object.keys(all).forEach(function(id){var p=all[id],old=ftickPrevious[id];if(!old)return;
       var delta=p.points-old.points;
-      var stat=delta>0?ftickStatChange(id):'';
+      var stat=ftickStatChange(id),pending=ftickPendingTD[id];
       var rank=ranks[p.pos].findIndex(function(x){return x.id===id})+1;
       var label=ftickName(id,true)+' +'+delta.toFixed(1)+' FP · '+p.points.toFixed(1)+' total · '+p.pos+rank;
-      if(delta>=4||stat){movers.push({id:id,delta:delta,stat:stat,label:label})}
+      if(pending&&delta>0){
+        pending.event.text='TD · '+ftickName(id,true)+' · '+pending.stat+' · '+label;
+        delete ftickPendingTD[id];
+      }
+      if(stat&&delta<=0&&!pending){
+        ftickPendingTD[id]={stat:stat,at:Date.now(),event:ftickEvent(
+          'TD · '+ftickName(id,true)+' · '+stat+' · '+p.points.toFixed(1)+' FP shown',3)};
+      }else if((delta>=4||stat)&&(!pending||stat)){
+        movers.push({id:id,delta:delta,stat:stat,label:label})
+      }
       else if(delta<=-4)ftickEvent('DROP · '+ftickName(id,true)+' '+delta.toFixed(1)+' FP · '+p.points.toFixed(1)+' total',1);
       var crossed=[20,25,30,35,40].filter(function(n){return old.points<n&&p.points>=n&&!ftickThresholds[id+':'+n]});
       if(crossed.length){var n=crossed[crossed.length-1];
@@ -691,7 +705,7 @@ function ftickRotate(){if(!ftickWindow()||Date.now()<ftickInterruptUntil||Date.n
 function ftickPoll(){if(!FTICK_ON||!ftickWindow()||ftickWeek==null||ftickBusy){ftickRender();return}
   ftickBusy=true;
   var prefix='nfl/regular/'+ftickSeason+'/'+ftickWeek;
-  var statsDue=Date.now()-ftickStatsAt>=120000;
+  var statsDue=Date.now()-ftickStatsAt>=60000;
   Promise.allSettled([
     ftickFetch('league/'+SLEEPER_LEAGUE+'/matchups/'+ftickWeek),
     ftickFetch('scores/'+prefix),
@@ -703,7 +717,8 @@ function ftickPoll(){if(!FTICK_ON||!ftickWindow()||ftickWeek==null||ftickBusy){f
     if(res[1].status==='fulfilled'){try{ftickScores=ftickParseScores(res[1].value)}catch(e){}}
     if(res[0].status==='fulfilled'&&Array.isArray(res[0].value)){
       ftickLast=res[0].value;ftickProcess(ftickLast);
-    }else ftickBuild();
+    }else if(ftickStatsFresh&&ftickLast)ftickProcess(ftickLast);
+    else ftickBuild();
   }).catch(function(){}).finally(function(){ftickBusy=false;ftickRender()});
 }
 
