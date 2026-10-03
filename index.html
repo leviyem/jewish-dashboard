@@ -503,6 +503,7 @@ var ftickTeams={},ftickWeek=null,ftickSeason=null,ftickLast=null,ftickScores=nul
 var ftickPlayers={},ftickStats=null,ftickPrevious=null,ftickLeaders={},ftickMatchLeaders={};
 var ftickRecent=[],ftickAlerts=[],ftickThresholds={},ftickBench={},ftickSections=[],ftickSection=0;
 var ftickInterruptUntil=0,ftickRendered='',ftickBusy=false,ftickStatsAt=0,ftickStatsFresh=false;
+var ftickNextRotation=0;
 var FTICK_POSITIONS=['RB','WR','QB','TE','K','DEF'];
 var FTICK_BASE='https://api.sleeper.app/v1/';
 function ftickFetch(path){return fetch(FTICK_BASE+path,{cache:'no-store'}).then(function(r){
@@ -586,6 +587,7 @@ function ftickEvent(text,priority){var e={text:text,at:Date.now(),priority:prior
 }
 function ftickInterrupt(){if(!ftickWindow()||Date.now()<ftickInterruptUntil||!ftickAlerts.length)return;
   var e=ftickAlerts.shift();ftickInterruptUntil=Date.now()+8500;
+  if(ftickNextRotation)ftickNextRotation+=8500;
   ftickPaint('RECENT',e.text,true);
   setTimeout(function(){ftickInterruptUntil=0;ftickRender();ftickInterrupt()},8500);
 }
@@ -596,7 +598,9 @@ function ftickProcess(data){var all=ftickPlayersFrom(data),ranks=ftickRank(all),
   if(ftickPrevious){
     var movers=[];
     Object.keys(all).forEach(function(id){var p=all[id],old=ftickPrevious[id];if(!old)return;
-      var delta=p.points-old.points,stat=ftickStatChange(id),rank=ranks[p.pos].findIndex(function(x){return x.id===id})+1;
+      var delta=p.points-old.points;
+      var stat=delta>0?ftickStatChange(id):'';
+      var rank=ranks[p.pos].findIndex(function(x){return x.id===id})+1;
       var label=ftickName(id,true)+' +'+delta.toFixed(1)+' FP · '+p.points.toFixed(1)+' total · '+p.pos+rank;
       if(delta>=4||stat){movers.push({id:id,delta:delta,stat:stat,label:label})}
       else if(delta<=-4)ftickEvent('DROP · '+ftickName(id,true)+' '+delta.toFixed(1)+' FP · '+p.points.toFixed(1)+' total',1);
@@ -608,7 +612,7 @@ function ftickProcess(data){var all=ftickPlayersFrom(data),ranks=ftickRank(all),
         ftickEvent('BENCH BOMB · '+ftickName(id)+' '+p.points.toFixed(1)+' FP · '+(ftickTeams[p.roster]||'Team '+p.roster),1)}
     });
     movers.sort(function(a,b){return b.delta-a.delta});
-    movers.forEach(function(m,i){var prefix=m.stat?'TD · '+ftickName(m.id,true)+' · '+m.stat:(i===0?'HOT · ':'MOVE · ');
+    movers.forEach(function(m,i){var prefix=m.stat?'TD · '+ftickName(m.id,true)+' · '+m.stat+' · ':(i===0?'HOT · ':'MOVE · ');
       ftickEvent(prefix+m.label,m.stat||m.delta>=8?3:2)});
     pairs.forEach(function(p){var key=p[0].matchup_id,leader=matchLeaders[key],old=ftickMatchLeaders[key];
       if(old!=null&&leader!=null&&old!==leader){var a=Number(p[0].points),b=Number(p[1].points);
@@ -664,8 +668,13 @@ function ftickPaint(tag,content,interrupt){var key=tag+'|'+content+'|'+interrupt
   var run=g('ftickRun');g('ftickTag').textContent='🏈 '+tag;
   var item='<span class="ftick-game"><b>'+esc(content)+'</b></span>';
   run.innerHTML=interrupt?item:item+item;
-  run.style.animation=interrupt?'none':'';
-  if(!interrupt)run.style.setProperty('--ftick-dur',Math.max(24,Math.round(run.scrollWidth/2/95))+'s');
+  if(interrupt){run.style.animation='none';return}
+  var width=run.scrollWidth/2,viewport=run.parentNode.clientWidth;
+  var duration=width<=viewport?20:Math.max(20,Math.ceil(width/95));
+  if(width<=viewport)run.innerHTML=item;
+  run.style.animation=width<=viewport?'none':'';
+  if(width>viewport)run.style.setProperty('--ftick-dur',duration+'s');
+  if(!ftickNextRotation)ftickNextRotation=Date.now()+(duration+1)*1000;
 }
 function ftickRender(){var el=g('ftick');if(!el)return;
   var show=FTICK_ON&&ftickWindow()&&g('rambamScreen').classList.contains('hidden')&&g('ulmanScreen').classList.contains('hidden');
@@ -674,8 +683,9 @@ function ftickRender(){var el=g('ftick');if(!el)return;
   var section=ftickSections[ftickSection]||{tag:'FANTASY',text:'Week '+(ftickWeek||'')+' · waiting for kickoff'};
   ftickPaint(section.tag,section.text,false);
 }
-function ftickRotate(){if(!ftickWindow()||Date.now()<ftickInterruptUntil)return;
+function ftickRotate(){if(!ftickWindow()||Date.now()<ftickInterruptUntil||Date.now()<ftickNextRotation)return;
   if(ftickSections.length)ftickSection=(ftickSection+1)%ftickSections.length;
+  ftickNextRotation=0;
   ftickRender();
 }
 function ftickPoll(){if(!FTICK_ON||!ftickWindow()||ftickWeek==null||ftickBusy){ftickRender();return}
@@ -1044,7 +1054,7 @@ document.addEventListener('visibilitychange',function(){
 requestWakeLock();
 ftickSetup();
 setInterval(ftickPoll,60000);
-setInterval(ftickRotate,20000);  // the window is re-checked on every tick
+setInterval(ftickRotate,1000);  // each section stays until its full text has passed
 startScreenRotation();
 })();
 </script>
